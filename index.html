@@ -76,8 +76,6 @@
     .tags { display: flex; flex-wrap: wrap; gap: 6px; }
     .tag { border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 4px 9px; font-size: .78rem; background: transparent; }
     .tag.active { color: #fff; border-color: var(--accent); background: var(--accent); }
-    .count-status { margin-top: 10px; color: var(--muted); font-size: .86rem; line-height: 1.5; }
-    .count-status strong { color: var(--text); }
     .memo-list { display: grid; gap: 9px; }
     .memo-item { text-align: left; width: 100%; background: color-mix(in oklab, var(--panel) 80%, transparent); }
     .memo-item.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -86,11 +84,19 @@
     .viewer-body { white-space: pre-wrap; line-height: 1.8; margin-top: 12px; }
     .empty { color: var(--muted); line-height: 1.7; }
     .hidden { display:none !important; }
+    .image-field { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+    .image-pick { display:inline-flex; align-items:center; justify-content:center; text-align:center; min-height:44px; }
+    .image-preview { width:100%; max-width:320px; max-height:220px; object-fit:contain; border:1px solid var(--line); border-radius:12px; margin-top:10px; }
+    .memo-thumb { width:88px; height:88px; object-fit:cover; border:1px solid var(--line); border-radius:10px; margin-top:8px; }
+    .viewer-image { width:100%; max-width:360px; max-height:260px; object-fit:contain; border:1px solid var(--line); border-radius:12px; margin-top:12px; }
     @media (max-width: 520px) {
       .wrap { width: min(94vw, 760px); padding-top: 12px; }
       .panel { padding: 12px; border-radius: 16px; }
       .row > * { flex: 1 1 100%; }
       .row .btn, .row .btn.sub, .row label { flex: 1 1 auto; }
+      .image-field > * { flex: 1 1 100%; }
+      .image-preview, .viewer-image { max-width:100%; max-height:220px; }
+      .memo-thumb { width:72px; height:72px; }
     }
   </style>
 </head>
@@ -110,7 +116,6 @@
         <option value="title">タイトル順</option>
       </select>
     </div>
-    <div id="countStatus" class="count-status">全メモ <strong>0件</strong> / 表示中 <strong>0件</strong></div>
     <div id="tagChips" class="tags" style="margin-top:10px;"></div>
   </section>
 
@@ -127,6 +132,11 @@
     <input id="titleInput" placeholder="タイトル" />
     <textarea id="bodyInput" placeholder="本文"></textarea>
     <input id="tagsInput" placeholder="タグ（カンマ区切り）" />
+    <div class="image-field">
+      <label class="btn sub image-pick">画像選択<input id="imageInput" type="file" accept="image/*" class="hidden"></label>
+      <button class="btn sub hidden" id="clearImageBtn" type="button">画像を外す</button>
+    </div>
+    <div id="imagePreviewWrap" class="hidden"><img id="imagePreview" class="image-preview" alt="画像プレビュー"></div>
     <div class="row" style="margin-top:10px;">
       <button class="btn" id="saveBtn">保存</button>
       <button class="btn sub hidden" id="cancelBtn">編集キャンセル</button>
@@ -143,13 +153,15 @@
 <script>
 const STORAGE_KEY = "kanseiWikiLiteCards";
 const THEME_KEY = "kanseiWikiLiteTheme";
-const state = { memos: JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"), editingId: null, selectedId: null, search: "", tagFilter: "", sortBy: "new" };
+const IMAGE_MAX_EDGE = 1200;
+const state = { memos: JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"), editingId: null, selectedId: null, search: "", tagFilter: "", sortBy: "new", pendingImage: null };
 const el = {
-  searchInput: document.getElementById("searchInput"), sortSelect: document.getElementById("sortSelect"), tagChips: document.getElementById("tagChips"), countStatus: document.getElementById("countStatus"),
+  searchInput: document.getElementById("searchInput"), sortSelect: document.getElementById("sortSelect"), tagChips: document.getElementById("tagChips"),
   titleInput: document.getElementById("titleInput"), bodyInput: document.getElementById("bodyInput"), tagsInput: document.getElementById("tagsInput"),
   saveBtn: document.getElementById("saveBtn"), cancelBtn: document.getElementById("cancelBtn"), formTitle: document.getElementById("formTitle"),
   memoList: document.getElementById("memoList"), viewer: document.getElementById("viewer"), themeBtn: document.getElementById("themeBtn"),
-  exportBtn: document.getElementById("exportBtn"), importInput: document.getElementById("importInput")
+  exportBtn: document.getElementById("exportBtn"), importInput: document.getElementById("importInput"),
+  imageInput: document.getElementById("imageInput"), clearImageBtn: document.getElementById("clearImageBtn"), imagePreviewWrap: document.getElementById("imagePreviewWrap"), imagePreview: document.getElementById("imagePreview")
 };
 const save = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state.memos));
 const parseTags = raw => raw.split(",").map(x => x.trim()).filter(Boolean);
@@ -157,6 +169,19 @@ const fmt = d => { const x = new Date(d); return Number.isNaN(x.getTime()) ? d :
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
 const escCsv = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replaceAll('"','""')}"` : s; };
 const csvLine = line => (line.match(/("(?:[^"]|"")*"|[^,]*)/g) || []).filter((_,i,a)=>i<a.length-1).map(v => v.replace(/^"|"$/g, "").replaceAll('""','"'));
+function setPreview(src){
+  if(!src){ el.imagePreviewWrap.classList.add("hidden"); el.clearImageBtn.classList.add("hidden"); el.imagePreview.removeAttribute("src"); return; }
+  el.imagePreview.src = src; el.imagePreviewWrap.classList.remove("hidden"); el.clearImageBtn.classList.remove("hidden");
+}
+async function resizeImage(file, maxEdge, quality){
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = h;
+  canvas.getContext("2d").drawImage(bmp, 0, 0, w, h); bmp.close();
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
+  return await new Promise((resolve, reject)=>{ const fr = new FileReader(); fr.onload=()=>resolve(String(fr.result||"")); fr.onerror=()=>reject(fr.error); fr.readAsDataURL(blob || file); });
+}
 function tagsAll(){ return [...new Set(state.memos.flatMap(m => Array.isArray(m.tags) ? m.tags : []))].sort((a,b)=>a.localeCompare(b,"ja")); }
 function filtered(){
   const q = state.search.toLowerCase();
@@ -174,18 +199,13 @@ function renderTags(){
   el.tagChips.innerHTML = [`<button class="tag ${state.tagFilter===""?"active":""}" data-tag="">すべて</button>`]
     .concat(tagsAll().map(t => `<button class="tag ${state.tagFilter===t?"active":""}" data-tag="${esc(t)}">#${esc(t)}</button>`)).join("");
 }
-function renderCount(items){
-  const total = state.memos.length;
-  const shown = items.length;
-  const filterText = state.search || state.tagFilter ? " 絞り込み中" : "";
-  el.countStatus.innerHTML = `全メモ <strong>${total}件</strong> / 表示中 <strong>${shown}件</strong>${filterText}`;
-}
 function ensureSelected(items){ if(!items.length){ state.selectedId = null; return; } if(!items.some(m=>m.id===state.selectedId)) state.selectedId = items[0].id; }
 function renderList(items){
   el.memoList.innerHTML = items.map(m => `<button class="memo-item ${m.id===state.selectedId?"active":""}" onclick="selectMemo('${m.id}')">
     <div class="memo-title">${esc(m.title || "(無題)")}</div>
     <div class="tags">${(m.tags||[]).slice(0,4).map(t=>`<span class="tag">#${esc(t)}</span>`).join("")}</div>
     <div class="meta">${esc(fmt(m.createdAt || ""))}</div>
+    ${m.image ? `<img class="memo-thumb" src="${esc(m.image)}" alt="サムネイル">` : ""}
   </button>`).join("") || `<p class="empty">まだメモがありません。最初の一枚を作りましょう。</p>`;
 }
 function renderViewer(items){
@@ -195,23 +215,25 @@ function renderViewer(items){
     <div class="tags">${(m.tags||[]).map(t=>`<button class="tag" onclick="filterTag('${esc(t)}')">#${esc(t)}</button>`).join("")}</div>
     <div class="meta" style="margin-top:8px;">作成日：${esc(m.createdAt || "")}</div>
     <div class="viewer-body">${esc(m.body || "")}</div>
+    ${m.image ? `<img class="viewer-image" src="${esc(m.image)}" alt="添付画像">` : ""}
     <div class="row" style="margin-top:14px;"><button class="btn sub" onclick="editMemo('${m.id}')">編集</button><button class="btn danger" onclick="removeMemo('${m.id}')">削除</button></div>`;
 }
-function render(){ const items = filtered(); ensureSelected(items); renderTags(); renderCount(items); renderList(items); renderViewer(items); }
+function render(){ const items = filtered(); ensureSelected(items); renderTags(); renderList(items); renderViewer(items); }
 window.selectMemo = id => { state.selectedId = id; render(); };
 window.filterTag = tag => { state.tagFilter = tag; render(); };
-window.editMemo = id => { const m = state.memos.find(x=>x.id===id); if(!m) return; state.editingId = id; state.selectedId = id; el.formTitle.textContent = "メモを編集"; el.saveBtn.textContent = "更新"; el.cancelBtn.classList.remove("hidden"); el.titleInput.value = m.title || ""; el.bodyInput.value = m.body || ""; el.tagsInput.value = (m.tags||[]).join(", "); scrollTo({top:0, behavior:"smooth"}); };
+window.editMemo = id => { const m = state.memos.find(x=>x.id===id); if(!m) return; state.editingId = id; state.selectedId = id; state.pendingImage = null; el.formTitle.textContent = "メモを編集"; el.saveBtn.textContent = "更新"; el.cancelBtn.classList.remove("hidden"); el.titleInput.value = m.title || ""; el.bodyInput.value = m.body || ""; el.tagsInput.value = (m.tags||[]).join(", "); setPreview(m.image || ""); scrollTo({top:0, behavior:"smooth"}); };
 window.removeMemo = id => { if(!confirm("このメモを削除しますか？")) return; state.memos = state.memos.filter(m=>m.id!==id); save(); render(); };
-function resetForm(){ state.editingId = null; el.formTitle.textContent = "メモを追加"; el.saveBtn.textContent = "保存"; el.cancelBtn.classList.add("hidden"); el.titleInput.value = ""; el.bodyInput.value = ""; el.tagsInput.value = ""; }
+function resetForm(){ state.editingId = null; state.pendingImage = null; el.formTitle.textContent = "メモを追加"; el.saveBtn.textContent = "保存"; el.cancelBtn.classList.add("hidden"); el.titleInput.value = ""; el.bodyInput.value = ""; el.tagsInput.value = ""; el.imageInput.value = ""; setPreview(""); }
 function saveMemo(){
   const title = el.titleInput.value.trim(), body = el.bodyInput.value.trim(), tags = parseTags(el.tagsInput.value);
-  if(!title && !body){ alert("タイトルか本文を入力してください。"); return; }
-  if(state.editingId){ const m = state.memos.find(x=>x.id===state.editingId); if(m){ m.title = title; m.body = body; m.tags = tags; state.selectedId = m.id; } }
-  else { const m = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), title, body, tags, createdAt: new Date().toLocaleString("ja-JP") }; state.memos.push(m); state.selectedId = m.id; }
+  const editingMemo = state.editingId ? state.memos.find(x=>x.id===state.editingId) : null;
+  if(!title && !body && !state.pendingImage && !editingMemo?.image){ alert("タイトル、本文、画像のいずれかを入力してください。"); return; }
+  if(state.editingId){ const m = state.memos.find(x=>x.id===state.editingId); if(m){ const nextImage = state.pendingImage?.remove ? "" : (state.pendingImage || m.image || ""); m.title = title; m.body = body; m.tags = tags; m.image = nextImage; state.selectedId = m.id; } }
+  else { const m = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), title, body, tags, image: state.pendingImage || "", createdAt: new Date().toLocaleString("ja-JP") }; state.memos.push(m); state.selectedId = m.id; }
   save(); resetForm(); render();
 }
 function exportCsv(){
-  const rows = [["id","title","body","tags","createdAt"], ...state.memos.map(m => [m.id,m.title,m.body,(m.tags||[]).join("|"),m.createdAt])];
+  const rows = [["id","title","body","tags","image","createdAt"], ...state.memos.map(m => [m.id,m.title,m.body,(m.tags||[]).join("|"),m.image||"",m.createdAt])];
   const csv = rows.map(r => r.map(escCsv).join(",")).join("\n");
   const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `kansei_wiki_lite_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(a.href);
@@ -221,7 +243,7 @@ function importCsv(file){
   reader.onload = () => {
     const lines = String(reader.result || "").split(/\r?\n/).filter(Boolean);
     if(lines.length < 2){ alert("CSVが空です。"); return; }
-    state.memos = lines.slice(1).map(line => { const v = csvLine(line); return { id: v[0] || String(Date.now()), title: v[1] || "", body: v[2] || "", tags: (v[3]||"").split("|").map(t=>t.trim()).filter(Boolean), createdAt: v[4] || new Date().toLocaleString("ja-JP") }; });
+    state.memos = lines.slice(1).map(line => { const v = csvLine(line); return { id: v[0] || String(Date.now()), title: v[1] || "", body: v[2] || "", tags: (v[3]||"").split("|").map(t=>t.trim()).filter(Boolean), image: v[4] || "", createdAt: v[5] || new Date().toLocaleString("ja-JP") }; });
     state.selectedId = null; save(); render();
   };
   reader.readAsText(file, "utf-8");
@@ -235,6 +257,15 @@ el.tagChips.addEventListener("click", e => { const b = e.target.closest("[data-t
 el.themeBtn.addEventListener("click", () => { localStorage.setItem(THEME_KEY, document.body.classList.contains("dark") ? "light" : "dark"); applyTheme(); });
 el.exportBtn.addEventListener("click", exportCsv);
 el.importInput.addEventListener("change", e => { const f = e.target.files?.[0]; if(f) importCsv(f); e.target.value = ""; });
+el.imageInput.addEventListener("change", async e => {
+  const f = e.target.files?.[0];
+  if(!f) return;
+  if(!f.type.startsWith("image/")){ alert("画像ファイルを選択してください。"); e.target.value = ""; return; }
+  try { state.pendingImage = await resizeImage(f, IMAGE_MAX_EDGE, 0.88); setPreview(state.pendingImage); }
+  catch { alert("画像の読み込みに失敗しました。"); }
+  e.target.value = "";
+});
+el.clearImageBtn.addEventListener("click", () => { state.pendingImage = { remove: true }; setPreview(""); });
 applyTheme(); render();
 </script>
 </body>
