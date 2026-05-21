@@ -84,6 +84,8 @@
     .viewer-body { white-space: pre-wrap; line-height: 1.8; margin-top: 12px; }
     .empty { color: var(--muted); line-height: 1.7; }
     .hidden { display:none !important; }
+    /* 現在未使用のためCSVインポートボタンを非表示 */
+    .csv-import-btn { display: none; }
     .image-field { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
     .image-pick { display:inline-flex; align-items:center; justify-content:center; text-align:center; min-height:44px; }
     .image-preview { width:100%; max-width:320px; max-height:220px; object-fit:contain; border:1px solid var(--line); border-radius:12px; margin-top:10px; }
@@ -123,7 +125,7 @@
     <div class="row">
       <button class="btn sub" id="themeBtn">🌙/☀ 表示切替</button>
       <button class="btn sub" id="exportBtn">CSVエクスポート</button>
-      <label class="btn sub" style="cursor:pointer; text-align:center;">CSVインポート<input id="importInput" type="file" accept=".csv" class="hidden"></label>
+      <label class="btn sub csv-import-btn" style="cursor:pointer; text-align:center;">CSVインポート<input id="importInput" type="file" accept=".csv" class="hidden"></label>
     </div>
   </section>
 
