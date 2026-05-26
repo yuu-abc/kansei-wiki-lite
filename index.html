@@ -74,7 +74,10 @@
     .btn.danger { background: var(--danger); color: #fff; }
     .grow { flex: 1 1 220px; }
     .tags { display: flex; flex-wrap: wrap; gap: 6px; }
-    .tag { border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 4px 9px; font-size: .78rem; background: transparent; }
+    .tags.filter-tags { align-items: flex-start; }
+    .tags.filter-tags.collapsed { overflow: hidden; }
+    .tag { border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 4px 9px; font-size: .78rem; background: transparent; min-height: 32px; }
+    .tag.toggle { font-weight: 700; }
     .tag.active { color: #fff; border-color: var(--accent); background: var(--accent); }
     .memo-list { display: grid; gap: 9px; }
     .memo-item { text-align: left; width: 100%; background: color-mix(in oklab, var(--panel) 80%, transparent); }
@@ -118,7 +121,7 @@
         <option value="title">タイトル順</option>
       </select>
     </div>
-    <div id="tagChips" class="tags" style="margin-top:10px;"></div>
+    <div id="tagChips" class="tags filter-tags" style="margin-top:10px;"></div>
   </section>
 
   <section class="panel">
@@ -156,7 +159,7 @@
 const STORAGE_KEY = "kanseiWikiLiteCards";
 const THEME_KEY = "kanseiWikiLiteTheme";
 const IMAGE_MAX_EDGE = 1200;
-const state = { memos: JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"), editingId: null, selectedId: null, search: "", tagFilter: "", sortBy: "new", pendingImage: null };
+const state = { memos: JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"), editingId: null, selectedId: null, search: "", tagFilter: "", sortBy: "new", pendingImage: null, tagsExpanded: false };
 const el = {
   searchInput: document.getElementById("searchInput"), sortSelect: document.getElementById("sortSelect"), tagChips: document.getElementById("tagChips"),
   titleInput: document.getElementById("titleInput"), bodyInput: document.getElementById("bodyInput"), tagsInput: document.getElementById("tagsInput"),
@@ -198,8 +201,33 @@ function filtered(){
   });
 }
 function renderTags(){
-  el.tagChips.innerHTML = [`<button class="tag ${state.tagFilter===""?"active":""}" data-tag="">すべて</button>`]
-    .concat(tagsAll().map(t => `<button class="tag ${state.tagFilter===t?"active":""}" data-tag="${esc(t)}">#${esc(t)}</button>`)).join("");
+  const tags = [`<button class="tag ${state.tagFilter===""?"active":""}" data-tag="">すべて</button>`]
+    .concat(tagsAll().map(t => `<button class="tag ${state.tagFilter===t?"active":""}" data-tag="${esc(t)}">#${esc(t)}</button>`));
+  el.tagChips.innerHTML = tags.join("");
+
+  const chips = [...el.tagChips.querySelectorAll(".tag")];
+  if(!chips.length) return;
+  const rowHeight = Math.max(...chips.map(chip => chip.offsetHeight));
+  const styles = getComputedStyle(el.tagChips);
+  const gap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
+  const collapsedHeight = rowHeight * 2 + gap;
+  el.tagChips.classList.add("collapsed");
+  el.tagChips.style.maxHeight = `${collapsedHeight}px`;
+  const hasOverflow = el.tagChips.scrollHeight > collapsedHeight + 1;
+
+  if(hasOverflow || state.tagsExpanded){
+    const toggleText = state.tagsExpanded ? "閉じる" : "もっと見る";
+    el.tagChips.insertAdjacentHTML("beforeend", `<button class="tag toggle" data-tag-toggle="1">${toggleText}</button>`);
+  }
+
+  if(state.tagsExpanded){
+    el.tagChips.classList.remove("collapsed");
+    el.tagChips.style.maxHeight = "none";
+  }else if(!hasOverflow){
+    el.tagChips.classList.remove("collapsed");
+    el.tagChips.style.maxHeight = "none";
+    state.tagsExpanded = false;
+  }
 }
 function ensureSelected(items){ if(!items.length){ state.selectedId = null; return; } if(!items.some(m=>m.id===state.selectedId)) state.selectedId = items[0].id; }
 function renderList(items){
@@ -255,7 +283,14 @@ el.saveBtn.addEventListener("click", saveMemo);
 el.cancelBtn.addEventListener("click", resetForm);
 el.searchInput.addEventListener("input", e => { state.search = e.target.value; render(); });
 el.sortSelect.addEventListener("change", e => { state.sortBy = e.target.value; render(); });
-el.tagChips.addEventListener("click", e => { const b = e.target.closest("[data-tag]"); if(!b) return; state.tagFilter = b.dataset.tag || ""; render(); });
+el.tagChips.addEventListener("click", e => {
+  const toggle = e.target.closest("[data-tag-toggle]");
+  if(toggle){ state.tagsExpanded = !state.tagsExpanded; render(); return; }
+  const b = e.target.closest("[data-tag]");
+  if(!b) return;
+  state.tagFilter = b.dataset.tag || "";
+  render();
+});
 el.themeBtn.addEventListener("click", () => { localStorage.setItem(THEME_KEY, document.body.classList.contains("dark") ? "light" : "dark"); applyTheme(); });
 el.exportBtn.addEventListener("click", exportCsv);
 el.importInput.addEventListener("change", e => { const f = e.target.files?.[0]; if(f) importCsv(f); e.target.value = ""; });
