@@ -74,8 +74,10 @@
     .btn.danger { background: var(--danger); color: #fff; }
     .grow { flex: 1 1 220px; }
     .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .filter-tags-wrap { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
     .tags.filter-tags { align-items: flex-start; }
     .tags.filter-tags.collapsed { overflow: hidden; }
+    #tagToggleBtn { align-self: flex-end; min-height: 40px; padding: 8px 14px; font-size: .86rem; }
     .tag { border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 4px 9px; font-size: .78rem; background: transparent; min-height: 32px; }
     .tag.toggle { font-weight: 700; }
     .tag.active { color: #fff; border-color: var(--accent); background: var(--accent); }
@@ -102,6 +104,7 @@
       .image-field > * { flex: 1 1 100%; }
       .image-preview, .viewer-image { max-width:100%; max-height:220px; }
       .memo-thumb { width:72px; height:72px; }
+      #tagToggleBtn { width: 100%; align-self: stretch; }
     }
   </style>
 </head>
@@ -121,7 +124,10 @@
         <option value="title">タイトル順</option>
       </select>
     </div>
-    <div id="tagChips" class="tags filter-tags" style="margin-top:10px;"></div>
+    <div class="filter-tags-wrap" style="margin-top:10px;">
+      <div id="tagChips" class="tags filter-tags"></div>
+      <button id="tagToggleBtn" class="tag toggle hidden" type="button" aria-expanded="false">もっと見る</button>
+    </div>
   </section>
 
   <section class="panel">
@@ -161,7 +167,7 @@ const THEME_KEY = "kanseiWikiLiteTheme";
 const IMAGE_MAX_EDGE = 1200;
 const state = { memos: JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"), editingId: null, selectedId: null, search: "", tagFilter: "", sortBy: "new", pendingImage: null, tagsExpanded: false };
 const el = {
-  searchInput: document.getElementById("searchInput"), sortSelect: document.getElementById("sortSelect"), tagChips: document.getElementById("tagChips"),
+  searchInput: document.getElementById("searchInput"), sortSelect: document.getElementById("sortSelect"), tagChips: document.getElementById("tagChips"), tagToggleBtn: document.getElementById("tagToggleBtn"),
   titleInput: document.getElementById("titleInput"), bodyInput: document.getElementById("bodyInput"), tagsInput: document.getElementById("tagsInput"),
   saveBtn: document.getElementById("saveBtn"), cancelBtn: document.getElementById("cancelBtn"), formTitle: document.getElementById("formTitle"),
   memoList: document.getElementById("memoList"), viewer: document.getElementById("viewer"), themeBtn: document.getElementById("themeBtn"),
@@ -206,27 +212,37 @@ function renderTags(){
   el.tagChips.innerHTML = tags.join("");
 
   const chips = [...el.tagChips.querySelectorAll(".tag")];
-  if(!chips.length) return;
+  if(!chips.length){
+    el.tagToggleBtn.classList.add("hidden");
+    el.tagChips.classList.remove("collapsed");
+    el.tagChips.style.maxHeight = "none";
+    return;
+  }
+
   const rowHeight = Math.max(...chips.map(chip => chip.offsetHeight));
   const styles = getComputedStyle(el.tagChips);
   const gap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
   const collapsedHeight = rowHeight * 2 + gap;
+
   el.tagChips.classList.add("collapsed");
   el.tagChips.style.maxHeight = `${collapsedHeight}px`;
   const hasOverflow = el.tagChips.scrollHeight > collapsedHeight + 1;
 
-  if(hasOverflow || state.tagsExpanded){
-    const toggleText = state.tagsExpanded ? "閉じる" : "もっと見る";
-    el.tagChips.insertAdjacentHTML("beforeend", `<button class="tag toggle" data-tag-toggle="1">${toggleText}</button>`);
+  if(hasOverflow){
+    el.tagToggleBtn.classList.remove("hidden");
+    el.tagToggleBtn.textContent = state.tagsExpanded ? "閉じる" : "もっと見る";
+    el.tagToggleBtn.setAttribute("aria-expanded", state.tagsExpanded ? "true" : "false");
+  }else{
+    el.tagToggleBtn.classList.add("hidden");
+    state.tagsExpanded = false;
   }
 
-  if(state.tagsExpanded){
+  if(state.tagsExpanded && hasOverflow){
     el.tagChips.classList.remove("collapsed");
     el.tagChips.style.maxHeight = "none";
   }else if(!hasOverflow){
     el.tagChips.classList.remove("collapsed");
     el.tagChips.style.maxHeight = "none";
-    state.tagsExpanded = false;
   }
 }
 function ensureSelected(items){ if(!items.length){ state.selectedId = null; return; } if(!items.some(m=>m.id===state.selectedId)) state.selectedId = items[0].id; }
@@ -283,9 +299,8 @@ el.saveBtn.addEventListener("click", saveMemo);
 el.cancelBtn.addEventListener("click", resetForm);
 el.searchInput.addEventListener("input", e => { state.search = e.target.value; render(); });
 el.sortSelect.addEventListener("change", e => { state.sortBy = e.target.value; render(); });
+el.tagToggleBtn.addEventListener("click", () => { state.tagsExpanded = !state.tagsExpanded; render(); });
 el.tagChips.addEventListener("click", e => {
-  const toggle = e.target.closest("[data-tag-toggle]");
-  if(toggle){ state.tagsExpanded = !state.tagsExpanded; render(); return; }
   const b = e.target.closest("[data-tag]");
   if(!b) return;
   state.tagFilter = b.dataset.tag || "";
