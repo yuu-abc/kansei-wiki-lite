@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#8b6f47" />
+  <link rel="manifest" href="manifest.webmanifest" />
   <title>感性Wiki Lite</title>
   <style>
     :root {
@@ -112,7 +114,7 @@
 <main class="wrap">
   <header>
     <h1>感性Wiki Lite</h1>
-    <p class="lead">スマホで使うための公開用・軽量版です。個人的な初期メモは入れていません。保存はこの端末のブラウザ内だけです。</p>
+    <p class="lead">スマホで使うための公開用・軽量版です。個人的な初期メモは入れていません。保存はこの端末のブラウザ内だけです。ホーム画面に追加すると、初回読み込み後はオフラインでも開けます。</p>
   </header>
 
   <section class="panel sticky">
@@ -318,7 +320,13 @@ el.imageInput.addEventListener("change", async e => {
   e.target.value = "";
 });
 el.clearImageBtn.addEventListener("click", () => { state.pendingImage = { remove: true }; setPreview(""); });
-applyTheme(); render();
+function registerServiceWorker(){
+  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+  navigator.serviceWorker.register("./sw.js").catch(error => {
+    console.warn("Service worker registration failed", error);
+  });
+}
+applyTheme(); render(); registerServiceWorker();
 </script>
 </body>
 </html>
