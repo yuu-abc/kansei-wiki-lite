@@ -2,7 +2,7 @@
   "name": "感性Wiki Lite",
   "short_name": "感性Wiki",
   "description": "端末内に保存してオフラインでも使える軽量メモWikiです。",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#f5f2eb",
@@ -15,5 +15,6 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "id": "./"
 }
