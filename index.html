@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#8b6f47" />
   <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon.svg" />
   <title>感性Wiki Lite</title>
   <style>
     :root {
@@ -322,7 +323,9 @@ el.imageInput.addEventListener("change", async e => {
 el.clearImageBtn.addEventListener("click", () => { state.pendingImage = { remove: true }; setPreview(""); });
 function registerServiceWorker(){
   if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
-  navigator.serviceWorker.register("./sw.js").catch(error => {
+  navigator.serviceWorker.register("./sw.js").then(registration => {
+    registration.update();
+  }).catch(error => {
     console.warn("Service worker registration failed", error);
   });
 }

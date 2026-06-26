@@ -1,5 +1,10 @@
-const CACHE_NAME = "kansei-wiki-lite-v1";
-const APP_SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
+const CACHE_NAME = "kansei-wiki-lite-v2";
+const APP_SHELL = [
+  "./",
+  "./index.html",
+  "./manifest.webmanifest",
+  "./icon.svg",
+];
 
 self.addEventListener("install", event => {
   event.waitUntil(
@@ -17,20 +22,45 @@ self.addEventListener("activate", event => {
   );
 });
 
+function isNavigationRequest(request) {
+  return request.mode === "navigate" ||
+    (request.method === "GET" && request.headers.get("accept")?.includes("text/html"));
+}
+
+async function cacheFirst(request) {
+  const cached = await caches.match(request, { ignoreSearch: true });
+  if (cached) return cached;
+
+  const response = await fetch(request);
+  if (response && response.ok) {
+    const cache = await caches.open(CACHE_NAME);
+    cache.put(request, response.clone());
+  }
+  return response;
+}
+
+async function navigationFallback(request) {
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) {
+      const cache = await caches.open(CACHE_NAME);
+      cache.put("./index.html", response.clone());
+    }
+    return response;
+  } catch (error) {
+    return (await caches.match(request, { ignoreSearch: true })) ||
+      (await caches.match("./index.html", { ignoreSearch: true })) ||
+      (await caches.match("./", { ignoreSearch: true }));
+  }
+}
+
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
 
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
+  if (isNavigationRequest(event.request)) {
+    event.respondWith(navigationFallback(event.request));
+    return;
+  }
 
-      return fetch(event.request)
-        .then(response => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
-          return response;
-        })
-        .catch(() => caches.match("./index.html"));
-    })
-  );
+  event.respondWith(cacheFirst(event.request));
 });
