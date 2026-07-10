@@ -91,8 +91,11 @@
     .viewer-body { white-space: pre-wrap; line-height: 1.8; margin-top: 12px; }
     .empty { color: var(--muted); line-height: 1.7; }
     .hidden { display:none !important; }
-    /* 現在未使用のためCSVインポートボタンを非表示 */
-    .csv-import-btn { display: none; }
+    .notice { border-left:4px solid var(--accent); }
+    .notice h2 { margin-top:0; }
+    .notice p { line-height:1.7; }
+    /* CSVインポートはP0では非表示のまま維持 */
+    .csv-import-btn { display:none; }
     .image-field { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
     .image-pick { display:inline-flex; align-items:center; justify-content:center; text-align:center; min-height:44px; }
     .image-preview { width:100%; max-width:320px; max-height:220px; object-fit:contain; border:1px solid var(--line); border-radius:12px; margin-top:10px; }
@@ -116,7 +119,17 @@
     <h1>感性Wiki Lite</h1>
     <p class="lead">スマホで使うための公開用・軽量版です。個人的な初期メモは入れていません。保存はこの端末のブラウザ内だけです。ホーム画面に追加すると、初回読み込み後はオフラインでも開けます。</p>
   </header>
-
+  <section class="panel notice hidden" id="storageReadError" role="alert">
+    <h2>保存データを読み込めませんでした</h2>
+    <p>ブラウザデータを削除する前に、必要なら開発者へ相談してください。元の保存データは自動で削除・上書きしません。</p>
+    <p>この状態では、意図せず元データを上書きしないため、新規保存・削除・CSV出力を停止しています。</p>
+  </section>
+  <section class="panel notice hidden" id="storageNotice" role="dialog" aria-labelledby="storageNoticeTitle">
+    <h2 id="storageNoticeTitle">大切なお知らせ</h2>
+    <p>メモはこの端末・このブラウザ内だけに保存されます。機種変更やブラウザデータの削除では失われる可能性があります。</p>
+    <p>定期的にCSVエクスポートでバックアップしてください。</p>
+    <button class="btn" id="storageNoticeConfirm" type="button">確認しました</button>
+  </section>
   <section class="panel sticky">
     <div class="row">
       <input id="searchInput" class="grow" placeholder="検索：タイトル・本文・タグ" />
@@ -167,16 +180,24 @@
 const STORAGE_KEY = "kanseiWikiLiteCards";
 const THEME_KEY = "kanseiWikiLiteTheme";
 const IMAGE_MAX_EDGE = 1200;
-const state = { memos: JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"), editingId: null, selectedId: null, search: "", tagFilter: "", sortBy: "new", pendingImage: null, tagsExpanded: false };
+function loadStoredMemos(){
+  const raw=localStorage.getItem(STORAGE_KEY);
+  if(!raw)return {memos:[],error:false};
+  try { const parsed=JSON.parse(raw); return Array.isArray(parsed)?{memos:parsed,error:false}:{memos:[],error:true}; }
+  catch (_error) { return {memos:[],error:true}; }
+}
+const loadedMemos=loadStoredMemos();
+const state={memos:loadedMemos.memos,storageReadError:loadedMemos.error,editingId:null,selectedId:null,search:"",tagFilter:"",sortBy:"new",pendingImage:null,tagsExpanded:false};
 const el = {
   searchInput: document.getElementById("searchInput"), sortSelect: document.getElementById("sortSelect"), tagChips: document.getElementById("tagChips"), tagToggleBtn: document.getElementById("tagToggleBtn"),
   titleInput: document.getElementById("titleInput"), bodyInput: document.getElementById("bodyInput"), tagsInput: document.getElementById("tagsInput"),
   saveBtn: document.getElementById("saveBtn"), cancelBtn: document.getElementById("cancelBtn"), formTitle: document.getElementById("formTitle"),
   memoList: document.getElementById("memoList"), viewer: document.getElementById("viewer"), themeBtn: document.getElementById("themeBtn"),
   exportBtn: document.getElementById("exportBtn"), importInput: document.getElementById("importInput"),
-  imageInput: document.getElementById("imageInput"), clearImageBtn: document.getElementById("clearImageBtn"), imagePreviewWrap: document.getElementById("imagePreviewWrap"), imagePreview: document.getElementById("imagePreview")
+  imageInput: document.getElementById("imageInput"), clearImageBtn: document.getElementById("clearImageBtn"), imagePreviewWrap: document.getElementById("imagePreviewWrap"), imagePreview: document.getElementById("imagePreview"),
+  storageReadError:document.getElementById("storageReadError"),storageNotice:document.getElementById("storageNotice"),storageNoticeConfirm:document.getElementById("storageNoticeConfirm")
 };
-const save = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state.memos));
+const save=()=>{if(state.storageReadError)return false;localStorage.setItem(STORAGE_KEY,JSON.stringify(state.memos));return true;};
 const parseTags = raw => raw.split(",").map(x => x.trim()).filter(Boolean);
 const fmt = d => { const x = new Date(d); return Number.isNaN(x.getTime()) ? d : `${x.getFullYear()}/${String(x.getMonth()+1).padStart(2,"0")}/${String(x.getDate()).padStart(2,"0")}`; };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
@@ -195,92 +216,35 @@ async function resizeImage(file, maxEdge, quality){
   const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
   return await new Promise((resolve, reject)=>{ const fr = new FileReader(); fr.onload=()=>resolve(String(fr.result||"")); fr.onerror=()=>reject(fr.error); fr.readAsDataURL(blob || file); });
 }
-function tagsAll(){ return [...new Set(state.memos.flatMap(m => Array.isArray(m.tags) ? m.tags : []))].sort((a,b)=>a.localeCompare(b,"ja")); }
-function filtered(){
-  const q = state.search.toLowerCase();
-  const items = state.memos.filter(m => {
-    const tags = Array.isArray(m.tags) ? m.tags : [];
-    return (!q || [m.title,m.body,tags.join(" ")].join(" ").toLowerCase().includes(q)) && (!state.tagFilter || tags.includes(state.tagFilter));
-  });
-  return items.sort((a,b)=>{
-    if(state.sortBy === "title") return (a.title||"").localeCompare(b.title||"", "ja");
-    const ad = new Date(a.createdAt).getTime() || 0, bd = new Date(b.createdAt).getTime() || 0;
-    return state.sortBy === "old" ? ad - bd : bd - ad;
-  });
-}
-function renderTags(){
-  const tags = [`<button class="tag ${state.tagFilter===""?"active":""}" data-tag="">すべて</button>`]
-    .concat(tagsAll().map(t => `<button class="tag ${state.tagFilter===t?"active":""}" data-tag="${esc(t)}">#${esc(t)}</button>`));
-  el.tagChips.innerHTML = tags.join("");
-
-  const chips = [...el.tagChips.querySelectorAll(".tag")];
-  if(!chips.length){
-    el.tagToggleBtn.classList.add("hidden");
-    el.tagChips.classList.remove("collapsed");
-    el.tagChips.style.maxHeight = "none";
-    return;
-  }
-
-  const rowHeight = Math.max(...chips.map(chip => chip.offsetHeight));
-  const styles = getComputedStyle(el.tagChips);
-  const gap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
-  const collapsedHeight = rowHeight * 2 + gap;
-
-  el.tagChips.classList.add("collapsed");
-  el.tagChips.style.maxHeight = `${collapsedHeight}px`;
-  const hasOverflow = el.tagChips.scrollHeight > collapsedHeight + 1;
-
-  if(hasOverflow){
-    el.tagToggleBtn.classList.remove("hidden");
-    el.tagToggleBtn.textContent = state.tagsExpanded ? "閉じる" : "もっと見る";
-    el.tagToggleBtn.setAttribute("aria-expanded", state.tagsExpanded ? "true" : "false");
-  }else{
-    el.tagToggleBtn.classList.add("hidden");
-    state.tagsExpanded = false;
-  }
-
-  if(state.tagsExpanded && hasOverflow){
-    el.tagChips.classList.remove("collapsed");
-    el.tagChips.style.maxHeight = "none";
-  }else if(!hasOverflow){
-    el.tagChips.classList.remove("collapsed");
-    el.tagChips.style.maxHeight = "none";
-  }
-}
-function ensureSelected(items){ if(!items.length){ state.selectedId = null; return; } if(!items.some(m=>m.id===state.selectedId)) state.selectedId = items[0].id; }
-function renderList(items){
-  el.memoList.innerHTML = items.map(m => `<button class="memo-item ${m.id===state.selectedId?"active":""}" onclick="selectMemo('${m.id}')">
-    <div class="memo-title">${esc(m.title || "(無題)")}</div>
-    <div class="tags">${(m.tags||[]).slice(0,4).map(t=>`<span class="tag">#${esc(t)}</span>`).join("")}</div>
-    <div class="meta">${esc(fmt(m.createdAt || ""))}</div>
-    ${m.image ? `<img class="memo-thumb" src="${esc(m.image)}" alt="サムネイル">` : ""}
-  </button>`).join("") || `<p class="empty">まだメモがありません。最初の一枚を作りましょう。</p>`;
-}
-function renderViewer(items){
-  const m = items.find(x => x.id === state.selectedId);
-  if(!m){ el.viewer.innerHTML = `<h2>本文</h2><p class="empty">表示するメモを選んでください。</p>`; return; }
-  el.viewer.innerHTML = `<h2>${esc(m.title || "(無題)")}</h2>
-    <div class="tags">${(m.tags||[]).map(t=>`<button class="tag" onclick="filterTag('${esc(t)}')">#${esc(t)}</button>`).join("")}</div>
-    <div class="meta" style="margin-top:8px;">作成日：${esc(m.createdAt || "")}</div>
-    <div class="viewer-body">${esc(m.body || "")}</div>
-    ${m.image ? `<img class="viewer-image" src="${esc(m.image)}" alt="添付画像">` : ""}
-    <div class="row" style="margin-top:14px;"><button class="btn sub" onclick="editMemo('${m.id}')">編集</button><button class="btn danger" onclick="removeMemo('${m.id}')">削除</button></div>`;
-}
-function render(){ const items = filtered(); ensureSelected(items); renderTags(); renderList(items); renderViewer(items); }
-window.selectMemo = id => { state.selectedId = id; render(); };
-window.filterTag = tag => { state.tagFilter = tag; render(); };
-window.editMemo = id => { const m = state.memos.find(x=>x.id===id); if(!m) return; state.editingId = id; state.selectedId = id; state.pendingImage = null; el.formTitle.textContent = "メモを編集"; el.saveBtn.textContent = "更新"; el.cancelBtn.classList.remove("hidden"); el.titleInput.value = m.title || ""; el.bodyInput.value = m.body || ""; el.tagsInput.value = (m.tags||[]).join(", "); setPreview(m.image || ""); scrollTo({top:0, behavior:"smooth"}); };
-window.removeMemo = id => { if(!confirm("このメモを削除しますか？")) return; state.memos = state.memos.filter(m=>m.id!==id); save(); render(); };
+const text=v=>String(v??"");
+const memoTags=m=>Array.isArray(m&&m.tags)?m.tags.map(text).filter(Boolean):[];
+const findMemo=id=>state.memos.find(m=>text(m.id)===text(id));
+const safeImage=v=>typeof v==="string"&&/^data:image\/(?:jpeg|png|gif|webp);base64,/i.test(v)?v:"";
+function node(t,c,v){const n=document.createElement(t);if(c)n.className=c;if(v!==undefined)n.textContent=text(v);return n;}
+function tag(parent,value,click){const n=node(click?"button":"span","tag","#"+text(value));if(click){n.type="button";n.dataset.tag=text(value);}parent.append(n);}
+function tagsAll(){return [...new Set(state.memos.flatMap(memoTags))].sort((a,b)=>a.localeCompare(b,"ja"));}
+function filtered(){const q=state.search.toLowerCase();return state.memos.filter(m=>{const ts=memoTags(m);return(!q||[m.title,m.body,ts.join(" ")].map(text).join(" ").toLowerCase().includes(q))&&(!state.tagFilter||ts.includes(state.tagFilter));}).sort((a,b)=>{if(state.sortBy==="title")return text(a.title).localeCompare(text(b.title),"ja");const ad=new Date(a.createdAt).getTime()||0,bd=new Date(b.createdAt).getTime()||0;return state.sortBy==="old"?ad-bd:bd-ad;});}
+function renderTags(){el.tagChips.replaceChildren();const all=node("button","tag "+(state.tagFilter===""?"active":""),"すべて");all.type="button";all.dataset.tag="";el.tagChips.append(all);tagsAll().forEach(t=>{const c=node("button","tag "+(state.tagFilter===t?"active":""),"#"+t);c.type="button";c.dataset.tag=t;el.tagChips.append(c);});const chips=[...el.tagChips.querySelectorAll(".tag")];if(!chips.length){el.tagToggleBtn.classList.add("hidden");return;}const height=Math.max(...chips.map(c=>c.offsetHeight)),style=getComputedStyle(el.tagChips),gap=parseFloat(style.rowGap||style.gap||"0")||0,max=height*2+gap;el.tagChips.classList.add("collapsed");el.tagChips.style.maxHeight=max+"px";const overflow=el.tagChips.scrollHeight>max+1;if(overflow){el.tagToggleBtn.classList.remove("hidden");el.tagToggleBtn.textContent=state.tagsExpanded?"閉じる":"もっと見る";el.tagToggleBtn.setAttribute("aria-expanded",state.tagsExpanded?"true":"false");}else{el.tagToggleBtn.classList.add("hidden");state.tagsExpanded=false;}if(state.tagsExpanded&&overflow){el.tagChips.classList.remove("collapsed");el.tagChips.style.maxHeight="none";}else if(!overflow){el.tagChips.classList.remove("collapsed");el.tagChips.style.maxHeight="none";}}
+function ensureSelected(items){if(!items.length){state.selectedId=null;return;}if(!items.some(m=>text(m.id)===text(state.selectedId)))state.selectedId=items[0].id;}
+function renderList(items){el.memoList.replaceChildren();if(!items.length){el.memoList.append(node("p","empty","まだメモがありません。最初の一枚を作りましょう。"));return;}items.forEach(m=>{const item=node("button","memo-item "+(text(m.id)===text(state.selectedId)?"active":""));item.type="button";item.dataset.memoId=text(m.id);item.append(node("div","memo-title",m.title||"(無題)"));const ts=node("div","tags");memoTags(m).slice(0,4).forEach(t=>tag(ts,t,false));item.append(ts,node("div","meta",fmt(m.createdAt||"")));const image=safeImage(m.image);if(image){const img=node("img","memo-thumb");img.src=image;img.alt="サムネイル";item.append(img);}el.memoList.append(item);});}
+function renderViewer(items){el.viewer.replaceChildren();const m=items.find(x=>text(x.id)===text(state.selectedId));if(!m){el.viewer.append(node("h2","","本文"),node("p","empty","表示するメモを選んでください。"));return;}el.viewer.append(node("h2","",m.title||"(無題)"));const ts=node("div","tags");memoTags(m).forEach(t=>tag(ts,t,true));el.viewer.append(ts,node("div","meta","作成日："+text(m.createdAt||"")),node("div","viewer-body",m.body||""));const image=safeImage(m.image);if(image){const img=node("img","viewer-image");img.src=image;img.alt="添付画像";el.viewer.append(img);}const actions=node("div","row");actions.style.marginTop="14px";const edit=node("button","btn sub","編集"),del=node("button","btn danger","削除");edit.type=del.type="button";edit.dataset.action="edit";del.dataset.action="remove";edit.dataset.memoId=del.dataset.memoId=text(m.id);actions.append(edit,del);el.viewer.append(actions);}
+function render(){const items=filtered();ensureSelected(items);renderTags();renderList(items);renderViewer(items);}
+function selectMemo(id){state.selectedId=id;render();}
+function filterTag(value){state.tagFilter=value;render();}
+function editMemo(id){const m=findMemo(id);if(!m)return;state.editingId=m.id;state.selectedId=m.id;state.pendingImage=null;el.formTitle.textContent="メモを編集";el.saveBtn.textContent="更新";el.cancelBtn.classList.remove("hidden");el.titleInput.value=m.title||"";el.bodyInput.value=m.body||"";el.tagsInput.value=memoTags(m).join(", ");setPreview(safeImage(m.image));scrollTo({top:0,behavior:"smooth"});}
+function removeMemo(id){if(state.storageReadError){alert("保存データを読み込めないため、削除できません。");return;}if(!confirm("このメモを削除しますか？"))return;state.memos=state.memos.filter(m=>text(m.id)!==text(id));save();render();}
 function resetForm(){ state.editingId = null; state.pendingImage = null; el.formTitle.textContent = "メモを追加"; el.saveBtn.textContent = "保存"; el.cancelBtn.classList.add("hidden"); el.titleInput.value = ""; el.bodyInput.value = ""; el.tagsInput.value = ""; el.imageInput.value = ""; setPreview(""); }
 function saveMemo(){
-  const title = el.titleInput.value.trim(), body = el.bodyInput.value.trim(), tags = parseTags(el.tagsInput.value);
-  const editingMemo = state.editingId ? state.memos.find(x=>x.id===state.editingId) : null;
+  if(state.storageReadError){alert("保存データを読み込めないため、新規保存できません。");return;}
+  const title=el.titleInput.value.trim(),body=el.bodyInput.value.trim(),tags=parseTags(el.tagsInput.value);
+  const editingMemo=state.editingId?findMemo(state.editingId):null;
   if(!title && !body && !state.pendingImage && !editingMemo?.image){ alert("タイトル、本文、画像のいずれかを入力してください。"); return; }
-  if(state.editingId){ const m = state.memos.find(x=>x.id===state.editingId); if(m){ const nextImage = state.pendingImage?.remove ? "" : (state.pendingImage || m.image || ""); m.title = title; m.body = body; m.tags = tags; m.image = nextImage; state.selectedId = m.id; } }
+  if(state.editingId){ const m=findMemo(state.editingId); if(m){ const nextImage = state.pendingImage?.remove ? "" : (state.pendingImage || m.image || ""); m.title = title; m.body = body; m.tags = tags; m.image = nextImage; state.selectedId = m.id; } }
   else { const m = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), title, body, tags, image: state.pendingImage || "", createdAt: new Date().toLocaleString("ja-JP") }; state.memos.push(m); state.selectedId = m.id; }
   save(); resetForm(); render();
 }
 function exportCsv(){
+  if(state.storageReadError){alert("保存データを読み込めないため、CSVを出力できません。");return;}
   const rows = [["id","title","body","tags","image","createdAt"], ...state.memos.map(m => [m.id,m.title,m.body,(m.tags||[]).join("|"),m.image||"",m.createdAt])];
   const csv = rows.map(r => r.map(escCsv).join(",")).join("\n");
   const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
@@ -296,37 +260,11 @@ function importCsv(file){
   };
   reader.readAsText(file, "utf-8");
 }
-function applyTheme(){ document.body.classList.toggle("dark", (localStorage.getItem(THEME_KEY) || "dark") === "dark"); }
-el.saveBtn.addEventListener("click", saveMemo);
-el.cancelBtn.addEventListener("click", resetForm);
-el.searchInput.addEventListener("input", e => { state.search = e.target.value; render(); });
-el.sortSelect.addEventListener("change", e => { state.sortBy = e.target.value; render(); });
-el.tagToggleBtn.addEventListener("click", () => { state.tagsExpanded = !state.tagsExpanded; render(); });
-el.tagChips.addEventListener("click", e => {
-  const b = e.target.closest("[data-tag]");
-  if(!b) return;
-  state.tagFilter = b.dataset.tag || "";
-  render();
-});
-el.themeBtn.addEventListener("click", () => { localStorage.setItem(THEME_KEY, document.body.classList.contains("dark") ? "light" : "dark"); applyTheme(); });
-el.exportBtn.addEventListener("click", exportCsv);
-el.importInput.addEventListener("change", e => { const f = e.target.files?.[0]; if(f) importCsv(f); e.target.value = ""; });
-el.imageInput.addEventListener("change", async e => {
-  const f = e.target.files?.[0];
-  if(!f) return;
-  if(!f.type.startsWith("image/")){ alert("画像ファイルを選択してください。"); e.target.value = ""; return; }
-  try { state.pendingImage = await resizeImage(f, IMAGE_MAX_EDGE, 0.88); setPreview(state.pendingImage); }
-  catch { alert("画像の読み込みに失敗しました。"); }
-  e.target.value = "";
-});
-el.clearImageBtn.addEventListener("click", () => { state.pendingImage = { remove: true }; setPreview(""); });
-function registerServiceWorker(){
-  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
-  navigator.serviceWorker.register("./sw.js").catch(error => {
-    console.warn("Service worker registration failed", error);
-  });
-}
-applyTheme(); render(); registerServiceWorker();
+function applyTheme(){document.body.classList.toggle("dark",(localStorage.getItem(THEME_KEY)||"dark")==="dark");}
+function setupNotices(){if(state.storageReadError){el.storageReadError.classList.remove("hidden");return;}const key="kanseiWikiLiteStorageNoticeSeenV1";if(localStorage.getItem(key)!=="1")el.storageNotice.classList.remove("hidden");el.storageNoticeConfirm.addEventListener("click",()=>{localStorage.setItem(key,"1");el.storageNotice.classList.add("hidden");});}
+el.saveBtn.addEventListener("click",saveMemo);el.cancelBtn.addEventListener("click",resetForm);el.searchInput.addEventListener("input",e=>{state.search=e.target.value;render();});el.sortSelect.addEventListener("change",e=>{state.sortBy=e.target.value;render();});el.tagToggleBtn.addEventListener("click",()=>{state.tagsExpanded=!state.tagsExpanded;render();});el.tagChips.addEventListener("click",e=>{const b=e.target.closest("[data-tag]");if(b)filterTag(b.dataset.tag||"");});el.memoList.addEventListener("click",e=>{const item=e.target.closest("[data-memo-id]");if(item)selectMemo(item.dataset.memoId);});el.viewer.addEventListener("click",e=>{const t=e.target.closest("[data-tag]");if(t){filterTag(t.dataset.tag||"");return;}const a=e.target.closest("[data-action]");if(!a)return;if(a.dataset.action==="edit")editMemo(a.dataset.memoId);if(a.dataset.action==="remove")removeMemo(a.dataset.memoId);});el.themeBtn.addEventListener("click",()=>{localStorage.setItem(THEME_KEY,document.body.classList.contains("dark")?"light":"dark");applyTheme();});el.exportBtn.addEventListener("click",exportCsv);el.importInput.addEventListener("change",e=>{const f=e.target.files?.[0];if(f)importCsv(f);e.target.value="";});el.imageInput.addEventListener("change",async e=>{const f=e.target.files?.[0];if(!f)return;if(!f.type.startsWith("image/")){alert("画像ファイルを選択してください。");e.target.value="";return;}try{state.pendingImage=await resizeImage(f,IMAGE_MAX_EDGE,0.88);setPreview(state.pendingImage);}catch{alert("画像の読み込みに失敗しました。");}e.target.value="";});el.clearImageBtn.addEventListener("click",()=>{state.pendingImage={remove:true};setPreview("");});
+function registerServiceWorker(){if(!("serviceWorker" in navigator)||location.protocol==="file:")return;navigator.serviceWorker.register("./sw.js").catch(error=>{console.warn("Service worker registration failed",error);});}
+setupNotices();applyTheme();render();registerServiceWorker();
 </script>
 </body>
 </html>
