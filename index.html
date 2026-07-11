@@ -197,7 +197,15 @@ const el = {
   imageInput: document.getElementById("imageInput"), clearImageBtn: document.getElementById("clearImageBtn"), imagePreviewWrap: document.getElementById("imagePreviewWrap"), imagePreview: document.getElementById("imagePreview"),
   storageReadError:document.getElementById("storageReadError"),storageNotice:document.getElementById("storageNotice"),storageNoticeConfirm:document.getElementById("storageNoticeConfirm")
 };
-const save=()=>{if(state.storageReadError)return false;localStorage.setItem(STORAGE_KEY,JSON.stringify(state.memos));return true;};
+const save=()=>{
+  if(state.storageReadError)return false;
+  try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state.memos));return true;}
+  catch(error){
+    console.error("Failed to save memos",error);
+    alert("保存に失敗しました。画像が大きい場合は、別の小さな画像で試すか、不要なメモを削除してください。");
+    return false;
+  }
+};
 const parseTags = raw => raw.split(",").map(x => x.trim()).filter(Boolean);
 const fmt = d => { const x = new Date(d); return Number.isNaN(x.getTime()) ? d : `${x.getFullYear()}/${String(x.getMonth()+1).padStart(2,"0")}/${String(x.getDate()).padStart(2,"0")}`; };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
@@ -207,14 +215,45 @@ function setPreview(src){
   if(!src){ el.imagePreviewWrap.classList.add("hidden"); el.clearImageBtn.classList.add("hidden"); el.imagePreview.removeAttribute("src"); return; }
   el.imagePreview.src = src; el.imagePreviewWrap.classList.remove("hidden"); el.clearImageBtn.classList.remove("hidden");
 }
+function readFileAsDataUrl(file){
+  return new Promise((resolve, reject)=>{
+    const fr = new FileReader();
+    fr.onload=()=>resolve(String(fr.result||""));
+    fr.onerror=()=>reject(fr.error || new Error("ファイルを読み込めませんでした。"));
+    fr.readAsDataURL(file);
+  });
+}
+function loadImageElement(src){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload=()=>resolve(img);
+    img.onerror=()=>reject(new Error("画像を読み込めませんでした。"));
+    img.src = src;
+  });
+}
 async function resizeImage(file, maxEdge, quality){
-  const bmp = await createImageBitmap(file);
-  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
-  const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
+  const src = await readFileAsDataUrl(file);
+  let source, width, height, close = () => {};
+  if("createImageBitmap" in window){
+    try{
+      const bmp = await createImageBitmap(file);
+      source = bmp; width = bmp.width; height = bmp.height; close = () => bmp.close();
+    }catch(_error){
+      source = null;
+    }
+  }
+  if(!source){
+    const img = await loadImageElement(src);
+    source = img; width = img.naturalWidth || img.width; height = img.naturalHeight || img.height;
+  }
+  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  const w = Math.max(1, Math.round(width * scale)), h = Math.max(1, Math.round(height * scale));
   const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = h;
-  canvas.getContext("2d").drawImage(bmp, 0, 0, w, h); bmp.close();
+  const ctx = canvas.getContext("2d");
+  if(!ctx){close(); return src;}
+  ctx.drawImage(source, 0, 0, w, h); close();
   const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
-  return await new Promise((resolve, reject)=>{ const fr = new FileReader(); fr.onload=()=>resolve(String(fr.result||"")); fr.onerror=()=>reject(fr.error); fr.readAsDataURL(blob || file); });
+  return blob ? await readFileAsDataUrl(blob) : src;
 }
 const text=v=>String(v??"");
 const memoTags=m=>Array.isArray(m&&m.tags)?m.tags.map(text).filter(Boolean):[];
@@ -232,16 +271,19 @@ function render(){const items=filtered();ensureSelected(items);renderTags();rend
 function selectMemo(id){state.selectedId=id;render();}
 function filterTag(value){state.tagFilter=value;render();}
 function editMemo(id){const m=findMemo(id);if(!m)return;state.editingId=m.id;state.selectedId=m.id;state.pendingImage=null;el.formTitle.textContent="メモを編集";el.saveBtn.textContent="更新";el.cancelBtn.classList.remove("hidden");el.titleInput.value=m.title||"";el.bodyInput.value=m.body||"";el.tagsInput.value=memoTags(m).join(", ");setPreview(safeImage(m.image));scrollTo({top:0,behavior:"smooth"});}
-function removeMemo(id){if(state.storageReadError){alert("保存データを読み込めないため、削除できません。");return;}if(!confirm("このメモを削除しますか？"))return;state.memos=state.memos.filter(m=>text(m.id)!==text(id));save();render();}
+function removeMemo(id){if(state.storageReadError){alert("保存データを読み込めないため、削除できません。");return;}if(!confirm("このメモを削除しますか？"))return;const previousMemos=state.memos;state.memos=state.memos.filter(m=>text(m.id)!==text(id));if(save())render();else state.memos=previousMemos;}
 function resetForm(){ state.editingId = null; state.pendingImage = null; el.formTitle.textContent = "メモを追加"; el.saveBtn.textContent = "保存"; el.cancelBtn.classList.add("hidden"); el.titleInput.value = ""; el.bodyInput.value = ""; el.tagsInput.value = ""; el.imageInput.value = ""; setPreview(""); }
 function saveMemo(){
   if(state.storageReadError){alert("保存データを読み込めないため、新規保存できません。");return;}
   const title=el.titleInput.value.trim(),body=el.bodyInput.value.trim(),tags=parseTags(el.tagsInput.value);
   const editingMemo=state.editingId?findMemo(state.editingId):null;
   if(!title && !body && !state.pendingImage && !editingMemo?.image){ alert("タイトル、本文、画像のいずれかを入力してください。"); return; }
+  const previousMemos=state.memos.map(m=>({...m,tags:memoTags(m)}));
+  const previousSelectedId=state.selectedId;
   if(state.editingId){ const m=findMemo(state.editingId); if(m){ const nextImage = state.pendingImage?.remove ? "" : (state.pendingImage || m.image || ""); m.title = title; m.body = body; m.tags = tags; m.image = nextImage; state.selectedId = m.id; } }
   else { const m = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), title, body, tags, image: state.pendingImage || "", createdAt: new Date().toLocaleString("ja-JP") }; state.memos.push(m); state.selectedId = m.id; }
-  save(); resetForm(); render();
+  if(save()){ resetForm(); render(); }
+  else { state.memos=previousMemos; state.selectedId=previousSelectedId; }
 }
 function exportCsv(){
   if(state.storageReadError){alert("保存データを読み込めないため、CSVを出力できません。");return;}
@@ -255,8 +297,9 @@ function importCsv(file){
   reader.onload = () => {
     const lines = String(reader.result || "").split(/\r?\n/).filter(Boolean);
     if(lines.length < 2){ alert("CSVが空です。"); return; }
+    const previousMemos=state.memos, previousSelectedId=state.selectedId;
     state.memos = lines.slice(1).map(line => { const v = csvLine(line); return { id: v[0] || String(Date.now()), title: v[1] || "", body: v[2] || "", tags: (v[3]||"").split("|").map(t=>t.trim()).filter(Boolean), image: v[4] || "", createdAt: v[5] || new Date().toLocaleString("ja-JP") }; });
-    state.selectedId = null; save(); render();
+    state.selectedId = null; if(save())render();else{state.memos=previousMemos;state.selectedId=previousSelectedId;}
   };
   reader.readAsText(file, "utf-8");
 }
